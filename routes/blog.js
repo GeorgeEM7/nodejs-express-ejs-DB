@@ -1,97 +1,128 @@
 const express = require("express");
+const mongodb = require("mongodb");
+const { restart } = require("nodemon");
 
 const db = require("../data/database");
 
+const ObjectId = mongodb.ObjectId;
+
 const router = express.Router();
 
-router.get("/", (req, res) => {
+router.get("/", function (req, res) {
   res.redirect("/posts");
 });
 
-router.get("/posts", async (req, res) => {
-  const query = `
-        SELECT posts.*, authors.name AS author_name FROM posts INNER JOIN authors ON posts.author_id = authors.id
-        `;
+router.get("/posts", async function (req, res) {
+  const posts = await db
+    .getDb()
+    .collection("posts")
+    .find({})
+    .project({ title: 1, summary: 1, "author.name": 1 })
+    .toArray();
 
-  const [posts] = await db.query(query);
   res.render("posts-list", { posts: posts });
 });
 
-router.get("/new-post", async (req, res) => {
-  const [authors] = await db.query("SELECT * FROM authors");
+router.get("/new-post", async function (req, res) {
+  const authors = await db.getDb().collection("authors").find().toArray();
   res.render("create-post", { authors: authors });
 });
 
 router.post("/posts", async (req, res) => {
-  const data = [
-    req.body.title,
-    req.body.summary,
-    req.body.content,
-    req.body.author,
-  ];
-  await db.query(
-    "INSERT INTO posts (title, summary, body, author_id) VALUES(?)",
-    [data]
-  );
+  const authorId = new ObjectId(req.body.author);
+  const author = await db
+    .getDb()
+    .collection("authors")
+    .findOne({ _id: authorId });
+
+  const newPost = {
+    title: req.body.title,
+    summary: req.body.summary,
+    content: req.body.content,
+    date: new Date(),
+    author: {
+      id: authorId,
+      name: author.name,
+      email: author.email,
+    },
+  };
+
+  const result = await db.getDb().collection("posts").insertOne(newPost);
   res.redirect("/posts");
 });
 
-router.get("/posts/:id", async (req, res) => {
-  const query = `
-        SELECT posts.*, authors.name AS author_name, authors.email AS author_email FROM posts INNER JOIN authors ON posts.author_id = authors.id WHERE posts.id = ?
-    `;
+router.get("/posts/:id", async (req, res, next) => {
+  let postId = req.params.id;
 
-  const [posts] = await db.query(query, [req.params.id]);
+  try {
+    postId = new ObjectId(postId);
+  } catch (error) {
+    return res.status(404).render("404");
+    // return next(error);
+  }
 
-  if (!posts || posts.length === 0) {
+  const post = await db
+    .getDb()
+    .collection("posts")
+    .findOne({ _id: postId }, { summary: 0 });
+
+  if (!post) {
     return res.status(404).render("404");
   }
 
-  const postData = {
-    ...posts[0],
-    date: posts[0].date.toISOString(),
-    humanReadableDate: posts[0].date.toLocaleDateString("en-UK", {
-      weekday: "long",
-      year: "numeric",
-      month: "long",
-      day: "numeric",
-    }),
-  };
-  res.render("post-detail", { post: postData });
+  post.humanReadableDate = post.date.toLocaleDateString("en-UK", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+  post.date = post.date.toISOString();
+
+  res.render("post-detail", { post: post });
 });
 
 router.get("/posts/:id/edit", async (req, res) => {
-  const query = `
-        SELECT * FROM posts WHERE posts.id = ?
-    `;
-  const [posts] = await db.query(query, [req.params.id]);
+  const postId = req.params.id;
+  const post = await db
+    .getDb()
+    .collection("posts")
+    .findOne(
+      { _id: new ObjectId(postId) },
+      { title: 1, summary: 1, content: 1 }
+    );
 
-  if (!posts || posts.length === 0) {
+  if (!post) {
     return res.status(404).render("404");
   }
 
-  res.render("update-post", { post: posts[0] });
+  res.render("update-post", { post: post });
 });
 
 router.post("/posts/:id/edit", async (req, res) => {
-  const query = `
-  UPDATE posts SET title = ?, summary = ?, body = ? WHERE id = ?
-  `;
-
-  await db.query(query, [
-    req.body.title,
-    req.body.summary,
-    req.body.content,
-    req.params.id,
-  ]);
-
+  const postId = new ObjectId(req.params.id);
+  const result = await db
+    .getDb()
+    .collection("posts")
+    .updateOne(
+      { _id: postId },
+      {
+        $set: {
+          title: req.body.title,
+          summary: req.body.summary,
+          content: req.body.content,
+          // date: new Date(),
+        },
+      }
+    );
   res.redirect("/posts");
 });
 
 router.post("/posts/:id/delete", async (req, res) => {
-
-  await db.query("DELETE FROM posts WHERE id =?", [req.params.id]);
-
+  const postId = new ObjectId(req.params.id);
+  const result = await db
+    .getDb()
+    .collection("posts")
+    .deleteOne({ _id: postId });
   res.redirect("/posts");
 });
 
